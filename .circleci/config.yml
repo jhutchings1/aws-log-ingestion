@@ -1,0 +1,86 @@
+version: 2.1
+
+references:
+  tag_filter: &tag_filter
+    filters:
+      branches:
+        ignore: /.*/
+      tags:
+        only: /^.*/
+
+orbs:
+  aws-cli: circleci/aws-cli@0.1.13
+
+commands:
+  configure_aws:
+    description: "Configure AWS"
+    parameters:
+      env:
+        type: string
+    steps:
+      - run:
+          name: Configure AWS CLI
+          command: |
+            aws configure set aws_access_key_id $AWS_ACCESS_KEY_ID_<< parameters.env >> --profile default
+            aws configure set aws_secret_access_key $AWS_SECRET_ACCESS_KEY_<< parameters.env >> --profile default
+            aws configure set region us-east-1 --profile default
+  sync:
+    description: "A simple encapsulation of doing an s3 sync"
+    parameters:
+      env:
+        type: string
+    steps:
+      - run:
+          name: Deploy to S3
+          command: aws s3api put-object --key "$CIRCLE_PROJECT_REPONAME/$CIRCLE_TAG.zip" --body $CIRCLE_TAG.zip --bucket shield-build-artifacts-<< parameters.env >>-us-east-1
+
+jobs:
+  build:
+    docker:
+      - image: circleci/python:latest
+    steps:
+      - checkout
+      - run:
+          name: Move
+          command: mv ./src/* ./
+      - run:
+          name: Compress
+          command: zip -r $CIRCLE_TAG.zip ./*
+      - persist_to_workspace:
+          root: .
+          paths:
+            - ./*
+  sync-dev:
+    executor: aws-cli/default
+    steps:
+      - aws-cli/install
+      - attach_workspace:
+          at: .
+      - configure_aws:
+          env: DEVELOPMENT
+      - sync:
+          env: development
+  sync-production:
+    executor: aws-cli/default
+    steps:
+      - aws-cli/install
+      - attach_workspace:
+          at: .
+      - configure_aws:
+          env: PRODUCTION
+      - sync:
+          env: production
+workflows:
+  version: 2
+  build_and_test:
+    jobs:
+      - build:
+          <<: *tag_filter
+      - sync-dev:
+          requires:
+            - build
+          <<: *tag_filter
+      - sync-production:
+          requires:
+            - build
+          <<: *tag_filter
